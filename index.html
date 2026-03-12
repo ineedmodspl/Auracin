@@ -878,7 +878,7 @@ async function placeOrder(){
         metadata:{
           email,firstName:fn,lastName:ln,
           address:addr,city,zip,country,
-          cartJson:JSON.stringify(cart)
+          cartSummary:cart.map(i=>i.name+' x'+i.qty).join(', ').substring(0,490)
         }
       })
     });
