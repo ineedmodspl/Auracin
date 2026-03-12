@@ -547,13 +547,14 @@ nav{position:fixed;top:0;left:0;right:0;z-index:500;height:64px;display:flex;ali
         </div>
         <div class="form-box">
           <div class="form-box-title">Payment</div>
-          <div class="card-logos"><span class="card-logo">VISA</span><span class="card-logo">MC</span><span class="card-logo">AMEX</span><span class="card-logo">PAYPAL</span></div>
-          <div class="form-row full"><div class="fg"><label>Card Number</label><input id="ck-card" placeholder="4242 4242 4242 4242" maxlength="19" oninput="fmtCard(this)"></div></div>
-          <div class="form-row">
-            <div class="fg"><label>Expiry</label><input id="ck-exp" placeholder="MM / YY" maxlength="7" oninput="fmtExp(this)"></div>
-            <div class="fg"><label>CVV</label><input id="ck-cvv" placeholder="•••" maxlength="4"></div>
+          <div class="card-logos"><span class="card-logo">VISA</span><span class="card-logo">MC</span><span class="card-logo">AMEX</span></div>
+          <div class="form-row full">
+            <div class="fg">
+              <label>Card Details</label>
+              <div id="stripe-card-element" style="background:#1a1a1e;border:1px solid rgba(198,181,144,0.25);border-radius:4px;padding:14px 12px;margin-top:4px;"></div>
+              <div id="stripe-card-errors" style="color:#e05c5c;font-size:0.8rem;margin-top:6px;"></div>
+            </div>
           </div>
-          <div class="form-row full"><div class="fg"><label>Name on Card</label><input id="ck-cn" placeholder="FULL NAME"></div></div>
         </div>
       </div>
       <div class="os-box">
@@ -854,31 +855,70 @@ function buildOrderSummary(){
 function fmtCard(el){let v=el.value.replace(/\D/g,'').substring(0,16);el.value=v.replace(/(.{4})/g,'$1 ').trim();}
 function fmtExp(el){let v=el.value.replace(/\D/g,'').substring(0,4);if(v.length>=2)v=v.substring(0,2)+' / '+v.substring(2);el.value=v;}
 
-function placeOrder(){
+async function placeOrder(){
   const email=document.getElementById('ck-email').value.trim();
   const fn=document.getElementById('ck-fn').value.trim();
   const ln=document.getElementById('ck-ln').value.trim();
   const addr=document.getElementById('ck-addr').value.trim();
-  const card=document.getElementById('ck-card').value.trim();
-  if(!email||!fn||!ln||!addr||!card){showToast('Please fill in all fields');return;}
+  const city=document.getElementById('ck-city').value.trim();
+  const zip=document.getElementById('ck-zip').value.trim();
+  const country=document.getElementById('ck-country').value.trim();
+  if(!email||!fn||!ln||!addr){showToast('Please fill in all fields');return;}
   if(!cart.length){showToast('Cart is empty');return;}
   const btn=document.querySelector('.place-btn');
   btn.textContent='Processing...';btn.disabled=true;
-  setTimeout(()=>{
-    const total=cartTotal();
-    const orderNum='AUR-'+Math.random().toString(36).substring(2,8).toUpperCase();
-    // Show success
-    document.getElementById('s-order-box').innerHTML=`
-      <div class="s-row"><span class="lbl">Order</span><span class="val">${orderNum}</span></div>
-      <div class="s-row"><span class="lbl">Customer</span><span class="val">${fn} ${ln}</span></div>
-      <div class="s-row"><span class="lbl">Items</span><span class="val">${cart.length} piece${cart.length>1?'s':''}</span></div>
-      <div class="s-row"><span class="lbl">Order Total</span><span class="val">$${total.toFixed(2)}</span></div>
-      <div class="s-row"><span class="lbl">Delivery</span><span class="val">5–10 business days</span></div>
-    `;
-    cart=[];updateBadge();renderCart();
+  document.getElementById('stripe-card-errors').textContent='';
+  try{
+    // Create payment intent
+    const res=await fetch('/.netlify/functions/create-payment-intent',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        amount:Math.round(cartTotal()*100),
+        metadata:{
+          email,firstName:fn,lastName:ln,
+          address:addr,city,zip,country,
+          cartJson:JSON.stringify(cart)
+        }
+      })
+    });
+    const data=await res.json();
+    if(!data.clientSecret){
+      showToast(data.error||'Payment error, please try again');
+      btn.textContent='Place Order';btn.disabled=false;
+      return;
+    }
+    // Confirm card payment with Stripe Elements
+    const result=await stripe.confirmCardPayment(data.clientSecret,{
+      payment_method:{
+        card:stripeCardElement,
+        billing_details:{
+          name:`${fn} ${ln}`,
+          email,
+          address:{line1:addr,city,postal_code:zip}
+        }
+      }
+    });
+    if(result.error){
+      document.getElementById('stripe-card-errors').textContent=result.error.message;
+      btn.textContent='Place Order';btn.disabled=false;
+    } else if(result.paymentIntent.status==='succeeded'){
+      const orderNum='AUR-'+Math.random().toString(36).substring(2,8).toUpperCase();
+      document.getElementById('s-order-box').innerHTML=`
+        <div class="s-row"><span class="lbl">Order</span><span class="val">${orderNum}</span></div>
+        <div class="s-row"><span class="lbl">Customer</span><span class="val">${fn} ${ln}</span></div>
+        <div class="s-row"><span class="lbl">Items</span><span class="val">${cart.length} piece${cart.length>1?'s':''}</span></div>
+        <div class="s-row"><span class="lbl">Total</span><span class="val">$${cartTotal().toFixed(2)}</span></div>
+        <div class="s-row"><span class="lbl">Delivery</span><span class="val">5,10 business days</span></div>
+      `;
+      cart=[];updateBadge();renderCart();
+      btn.textContent='Place Order';btn.disabled=false;
+      showPg('success');
+    }
+  } catch(e){
+    showToast('Network error, please try again');
     btn.textContent='Place Order';btn.disabled=false;
-    showPg('success');
-  },1800);
+  }
 }
 
 // ═══ NAVIGATION ══════════════════════════════
@@ -1006,5 +1046,27 @@ if(!sessionStorage.getItem('region-set')){
   </div>
 </div>
 
+
+<script>
+let stripe, stripeElements, stripeCardElement;
+function initStripe() {
+  stripe = Stripe('pk_test_51T9llLLp0jl5glNrSpN8jBHaacq8TlXkvqpcYqrA43f0uejkx4cf93orl6tcCo6Kxu5F0Yjn0bpsS4iMt9IUklpC00f9kSFPwJ');
+  stripeElements = stripe.elements();
+  stripeCardElement = stripeElements.create('card', {
+    style: {
+      base: {
+        color: '#F6F4EF',
+        fontFamily: "'Inter', sans-serif",
+        fontSize: '15px',
+        '::placeholder': { color: 'rgba(246,244,239,0.35)' },
+        iconColor: '#C6B590'
+      },
+      invalid: { color: '#e05c5c' }
+    }
+  });
+  stripeCardElement.mount('#stripe-card-element');
+}
+</script>
+<script src="https://js.stripe.com/v3/" onload="initStripe()"></script>
 </body>
 </html>
